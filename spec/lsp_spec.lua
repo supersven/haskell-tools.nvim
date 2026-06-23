@@ -19,3 +19,45 @@ describe('LSP client API', function()
     end)
   end
 end)
+
+describe('Buffer reload handler (_on_buf_reload)', function()
+  local stub = require('luassert.stub')
+  local ht = require('haskell-tools')
+  local LspHelpers = require('haskell-tools.lsp.helpers')
+
+  it('calls force_refresh when HLS clients are attached', function()
+    local bufnr = vim.api.nvim_create_buf(false, true)
+    local get_active = stub(LspHelpers, 'get_active_hls_clients')
+    get_active.returns({ { id = 1, name = 'haskell-tools.nvim' } })
+    local force_refresh = stub(vim.lsp.semantic_tokens, 'force_refresh')
+    local start = stub(ht.lsp, 'start')
+
+    ht.lsp._on_buf_reload(bufnr)
+
+    assert.stub(force_refresh).was_called_with(bufnr)
+    assert.stub(start).was_not_called()
+
+    get_active:revert()
+    force_refresh:revert()
+    start:revert()
+    vim.api.nvim_buf_delete(bufnr, { force = true })
+  end)
+
+  it('restarts HLS when no clients are attached after reload', function()
+    local bufnr = vim.api.nvim_create_buf(false, true)
+    local get_active = stub(LspHelpers, 'get_active_hls_clients')
+    get_active.returns({})
+    local force_refresh = stub(vim.lsp.semantic_tokens, 'force_refresh')
+    local start = stub(ht.lsp, 'start')
+
+    ht.lsp._on_buf_reload(bufnr)
+
+    assert.stub(start).was_called_with(bufnr)
+    assert.stub(force_refresh).was_not_called()
+
+    get_active:revert()
+    force_refresh:revert()
+    start:revert()
+    vim.api.nvim_buf_delete(bufnr, { force = true })
+  end)
+end)

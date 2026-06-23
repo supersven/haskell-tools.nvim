@@ -3,6 +3,8 @@
 local HTConfig = require('haskell-tools.config.internal')
 local log = require('haskell-tools.log.internal')
 local Types = require('haskell-tools.types.internal')
+local LspHelpers = require('haskell-tools.lsp.helpers')
+local LspHelpers = require('haskell-tools.lsp.helpers')
 
 ---@brief [[
 --- The following commands are available if an LSP client is active:
@@ -115,8 +117,6 @@ Hls.start = function(bufnr)
       handlers[k] = suppress_method_not_found_error(default_handler)
     end
   end
-
-  local LspHelpers = require('haskell-tools.lsp.helpers')
   local project_root = ht.project.root_dir(file)
   local hls_settings = type(hls_opts.settings) == 'function' and hls_opts.settings(project_root) or hls_opts.settings
 
@@ -148,6 +148,19 @@ Hls.start = function(bufnr)
       if Types.evaluate(code_lens_opts.autoRefresh) then
         vim.lsp.codelens.enable(true, { bufnr = buf })
       end
+      -- BufReadPost fires after all nvim_buf_attach on_reload callbacks,
+      -- giving HLS time to process didOpen before we re-request semantic tokens.
+      local _augroup = vim.api.nvim_create_augroup(
+        ('haskell-tools-reload-%d'):format(buf), { clear = true }
+      )
+      vim.api.nvim_create_autocmd('BufReadPost', {
+        buffer = buf,
+        group  = _augroup,
+        desc   = 'haskell-tools: re-sync HLS after external file change',
+        callback = function()
+          vim.schedule(function() Hls._on_buf_reload(buf) end)
+        end,
+      })
     end,
     on_init = function(client, _)
       ensure_clean_exit_on_quit(client, bufnr)
@@ -167,6 +180,21 @@ Hls.start = function(bufnr)
   local client_config = vim.tbl_deep_extend('force', {}, lsp_start_opts, hls_config)
   local client_id = vim.lsp.start(client_config)
   return client_id
+end
+
+---Re-sync HLS after a buffer reload triggered by an external file change.
+---Exposed for testing via spec/lsp_spec.lua
+---@param buf integer Buffer number
+Hls._on_buf_reload = function(buf)
+  local hls_clients = LspHelpers.get_active_hls_clients(buf)
+  if #hls_clients == 0 then
+    -- HLS detached; restart it so didOpen is sent with new content.
+    Hls.start(buf)
+  else
+    -- HLS sent didClose + didOpen; force fresh token request now that it
+    -- has had time to process the new document.
+    vim.lsp.semantic_tokens.force_refresh(buf)
+  end
 end
 
 ---Evaluate all code snippets in comments.
